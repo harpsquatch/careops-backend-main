@@ -61,7 +61,6 @@ class VisitCreate(BaseModel):
 
 
 class VisitUpdate(BaseModel):
-    id: int
     status: Optional[int] = None
     text: Optional[str] = None
     completed_date: Optional[str] = None
