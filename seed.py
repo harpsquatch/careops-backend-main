@@ -2,8 +2,10 @@
 Seed the database with realistic healthcare demo data.
 Run:  python seed.py
 """
+import random
 from database import SessionLocal, engine, Base
 from models import Account, Patient, Visit, Worker
+from auth import hash_password
 from datetime import date, timedelta
 
 Base.metadata.create_all(bind=engine)
@@ -18,7 +20,7 @@ db.commit()
 account = Account(
     uid="1",
     email="admin@careops.io",
-    hashed_password="",
+    hashed_password=hash_password("admin123"),
     account_name="CareOps Demo",
     full_name="Admin User",
     phone="555-0100",
@@ -74,8 +76,7 @@ for name, addr, desc, lat, lng, level, stype, sv, active in patient_data:
 
 db.flush()
 
-# ─── Visits ───
-today = date.today()
+# ─── Visit instructions pool ───
 visit_templates = [
     "Administer medications and check vitals",
     "Wound dressing change and assessment",
@@ -89,18 +90,88 @@ visit_templates = [
     "IV therapy and fluid intake tracking",
 ]
 
+# ─── Generate 90 days of visit history per patient ───
+today = date.today()
+rng = random.Random(42)  # deterministic seed for reproducibility
+
+total_visits = 0
+
 for p in patients:
-    for i in range(3):
-        due = today + timedelta(days=i * 3 - 2)
+    # Each patient has scheduled_visits per month. Calculate interval in days.
+    visits_per_month = p.scheduled_visits or 4
+    interval = max(1, round(30 / visits_per_month))
+
+    # Per-patient behavior profile (simulates different quality of care)
+    # completion_rate: likelihood a visit gets completed
+    # on_time_rate: likelihood a completed visit is on time
+    # decline_phase: optional period of declining care (adds realism)
+    seed_val = p.id * 31
+    prng = random.Random(seed_val)
+    base_completion = 0.65 + prng.random() * 0.30   # 65-95%
+    base_on_time   = 0.60 + prng.random() * 0.30    # 60-90%
+    # Some patients have a "rough patch" mid-period
+    rough_start = prng.randint(25, 50)
+    rough_end   = rough_start + prng.randint(8, 18)
+    rough_penalty = 0.15 + prng.random() * 0.20     # drop 15-35% during rough patch
+
+    # Walk through 90 days and create visits at the expected cadence
+    day_offset = 0
+    visit_idx = 0
+    while day_offset < 90:
+        due = today - timedelta(days=89 - day_offset)
+
+        # During rough patch, lower completion and on-time rates
+        in_rough = rough_start <= day_offset <= rough_end
+        completion_rate = base_completion - (rough_penalty if in_rough else 0)
+        on_time_rate = base_on_time - (rough_penalty * 0.5 if in_rough else 0)
+
+        # Determine if visit is completed
+        is_future = due > today
+        is_completed = (not is_future) and (rng.random() < completion_rate)
+
+        # Determine completion date
+        completed_date_str = ""
+        if is_completed:
+            if rng.random() < on_time_rate:
+                # On time: completed on due date or 1 day before
+                offset_days = rng.choice([0, 0, 0, -1])
+                comp = due + timedelta(days=offset_days)
+            else:
+                # Late: 1-4 days after due date
+                comp = due + timedelta(days=rng.randint(1, 4))
+            completed_date_str = comp.isoformat()
+
+        status = 2 if is_completed else 1
+
         v = Visit(
             uid="1",
             field_id=p.id,
-            text=visit_templates[(p.id + i) % len(visit_templates)],
-            status=2 if i == 0 else 1,
+            text=visit_templates[visit_idx % len(visit_templates)],
+            status=status,
             due_date=due.isoformat(),
-            completed_date=due.isoformat() if i == 0 else "",
+            completed_date=completed_date_str,
         )
         db.add(v)
+        total_visits += 1
+        visit_idx += 1
+
+        # Add jitter to interval (-1 to +2 days) for realism
+        jitter = rng.randint(-1, 2)
+        day_offset += max(1, interval + jitter)
+
+    # Also add a few future scheduled visits (next 14 days)
+    for fwd in range(1, 15, interval):
+        due = today + timedelta(days=fwd)
+        v = Visit(
+            uid="1",
+            field_id=p.id,
+            text=visit_templates[(visit_idx + fwd) % len(visit_templates)],
+            status=1,
+            due_date=due.isoformat(),
+            completed_date="",
+        )
+        db.add(v)
+        total_visits += 1
 
 # ─── Workers ───
 worker_data = [
@@ -125,5 +196,4 @@ for wuid, name, email in worker_data:
 db.commit()
 db.close()
 
-print("Seeded: 1 account, 8 patients, 24 visits, 5 workers")
-
+print(f"Seeded: 1 account, {len(patients)} patients, {total_visits} visits, {len(worker_data)} workers")

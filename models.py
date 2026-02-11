@@ -30,6 +30,7 @@ class Patient(Base):
     scheduled_visits = Column(Integer, default=0)
     notes = Column(Text, default="")
     active = Column(Boolean, default=True)
+    avatar_url = Column(String(500), default="")
 
 
 class Visit(Base):

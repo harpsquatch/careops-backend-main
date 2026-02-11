@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Visit
-from schemas import VisitUpdate, VisitOut
+from schemas import VisitCreate, VisitUpdate, VisitOut
 
 router = APIRouter(prefix="/v1/visits", tags=["visits"])
 
@@ -13,6 +13,22 @@ def list_visits(uid: str = Query(default=None), db: Session = Depends(get_db)):
     if uid:
         q = q.filter(Visit.uid == uid)
     return q.all()
+
+
+@router.post("", response_model=VisitOut)
+def create_visit(body: VisitCreate, uid: str = Query(default=None), db: Session = Depends(get_db)):
+    visit = Visit(
+        uid=uid or "",
+        field_id=body.field_id,
+        text=body.text,
+        status=body.status,
+        due_date=body.due_date,
+        completed_date="",
+    )
+    db.add(visit)
+    db.commit()
+    db.refresh(visit)
+    return visit
 
 
 @router.put("/{visit_id}", response_model=VisitOut)

@@ -17,11 +17,13 @@ def list_workers(uid: str = Query(default=None), db: Session = Depends(get_db)):
 
 @router.post("", response_model=WorkerOut)
 def create_worker(body: WorkerCreate, uid: str = Query(default=None), db: Session = Depends(get_db)):
+    auto_name = body.email.split("@")[0].replace(".", " ").title()
     worker = Worker(
         uid=str(db.query(Worker).count() + 100),
         account_uid=uid or "1",
         email=body.email,
-        full_name=body.email.split("@")[0].replace(".", " ").title(),
+        full_name=body.full_name or auto_name,
+        avatar=body.avatar or "",
     )
     db.add(worker)
     db.commit()

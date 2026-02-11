@@ -15,6 +15,7 @@ class PatientCreate(BaseModel):
     scheduled_visits: int = 0
     notes: str = ""
     active: bool = True
+    avatar_url: str = ""
 
 
 class PatientUpdate(BaseModel):
@@ -28,6 +29,7 @@ class PatientUpdate(BaseModel):
     scheduled_visits: Optional[int] = None
     notes: Optional[str] = None
     active: Optional[bool] = None
+    avatar_url: Optional[str] = None
 
 
 class PatientOut(BaseModel):
@@ -43,6 +45,7 @@ class PatientOut(BaseModel):
     scheduled_visits: int
     notes: str
     active: bool
+    avatar_url: str
 
     class Config:
         from_attributes = True
@@ -81,10 +84,15 @@ class VisitOut(BaseModel):
 
 class WorkerCreate(BaseModel):
     email: str
+    full_name: Optional[str] = None
+    avatar: Optional[str] = None
 
 
 class WorkerUpdate(BaseModel):
     uid: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    avatar: Optional[str] = None
     disabled: Optional[bool] = None
 
 
@@ -99,6 +107,18 @@ class WorkerOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ─── Auth ───
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 
 # ─── Account ───

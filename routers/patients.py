@@ -1,9 +1,8 @@
-import math
-import random
+from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Patient
+from models import Patient, Visit
 from schemas import PatientCreate, PatientUpdate, PatientOut
 
 router = APIRouter(prefix="/v1/patients", tags=["patients"])
@@ -59,34 +58,141 @@ def delete_patient(patient_id: int, uid: str = Query(default=None), db: Session 
     return {"ok": True}
 
 
-# ─── Chart data ───
+# ─── Chart data (real care scores from visit history) ───
 
-@router.get("/{patient_id}/chart")
-def get_chart(patient_id: int, uid: str = Query(default=None)):
-    """Generate smoothed care-score timeline for a patient."""
-    seed = patient_id * 137
-    rng = random.Random(seed)
 
-    labels, values, forecast_values = [], [], []
-    from datetime import date, timedelta
+def _compute_care_scores(visits: list, patient: Patient, window: int = 14):
+    """
+    Compute a daily care score (0-100) over the last 90 days + 14 day forecast.
+
+    Score = weighted sum of three components:
+      • Adherence  (50%):  completed / total due visits in rolling window
+      • Timeliness (30%):  on-time completions / total completions in window
+      • Engagement (20%):  actual frequency vs expected (scheduled_visits/month)
+
+    Returns (labels, values, forecast_values, valid_index).
+    """
     today = date.today()
+    history_days = 90
+    forecast_days = 14
+    total_days = history_days + forecast_days
 
-    score = 40 + rng.random() * 20  # start 40-60
-    mean = score
+    # Parse visits into structured dicts for fast lookup
+    parsed = []
+    for v in visits:
+        due = None
+        comp = None
+        try:
+            due = date.fromisoformat(v.due_date) if v.due_date else None
+        except (ValueError, TypeError):
+            pass
+        try:
+            comp = date.fromisoformat(v.completed_date) if v.completed_date else None
+        except (ValueError, TypeError):
+            pass
+        parsed.append({
+            "due": due,
+            "comp": comp,
+            "status": v.status,   # 1=pending, 2=completed
+        })
 
-    for i in range(90):
-        d = today - timedelta(days=89 - i)
+    expected_per_month = patient.scheduled_visits or 4
+    expected_per_window = expected_per_month * window / 30.0
+
+    labels = []
+    values = []
+    forecast_values = []
+    valid_index = history_days - 1  # last historical day
+
+    # EMA smoothing factor
+    alpha = 0.25
+    smoothed = None
+
+    for i in range(total_days):
+        d = today - timedelta(days=history_days - 1 - i)
         labels.append(d.isoformat())
 
-        drift = (mean - score) * 0.05
-        score += drift + rng.gauss(0, 1.2)
-        score = max(5, min(95, score))
-        values.append(round(score, 1))
+        is_forecast = i >= history_days
 
-        band = 6 + rng.random() * 4
+        if not is_forecast:
+            # ── Historical: compute from real visits ──
+            win_start = d - timedelta(days=window - 1)
+
+            # Only count visits with due_date up to today (not future scheduled ones)
+            due_in_window = [p for p in parsed if p["due"] and win_start <= p["due"] <= d]
+            completed_in_window = [p for p in due_in_window if p["status"] == 2 and p["comp"]]
+
+            total_due = len(due_in_window)
+            total_completed = len(completed_in_window)
+
+            # ── Adherence (50%) ──
+            if total_due > 0:
+                adherence = total_completed / total_due
+            else:
+                adherence = 1.0  # no visits due = assume stable
+
+            # ── Timeliness (30%) ──
+            if total_completed > 0:
+                on_time = sum(
+                    1 for p in completed_in_window
+                    if p["comp"] and p["due"] and p["comp"] <= p["due"]
+                )
+                timeliness = on_time / total_completed
+            else:
+                timeliness = 1.0 if total_due == 0 else 0.0
+
+            # ── Engagement (20%) ──
+            if expected_per_window > 0:
+                engagement = min(1.0, total_completed / expected_per_window)
+            else:
+                engagement = 1.0
+
+            raw_score = (adherence * 50) + (timeliness * 30) + (engagement * 20)
+            raw_score = max(0, min(100, raw_score))
+
+            # EMA smooth
+            if smoothed is None:
+                smoothed = raw_score
+            else:
+                smoothed = alpha * raw_score + (1 - alpha) * smoothed
+
+            values.append(round(smoothed, 1))
+
+            # Confidence band — tighter when more data
+            if total_due > 0:
+                band = max(3, 10 - total_due)
+            else:
+                band = 8
+        else:
+            # ── Forecast: hold last score with gentle mean-reversion toward 70 ──
+            last_score = smoothed if smoothed is not None else 50
+            target = 70  # long-term mean
+            reversion = 0.02  # slow pull toward target
+            last_score = last_score + (target - last_score) * reversion
+            smoothed = last_score
+            values.append(round(last_score, 1))
+
+            # Wider confidence band in forecast
+            days_ahead = i - history_days + 1
+            band = 4 + days_ahead * 0.8
+
         forecast_values.append({"min": round(band, 1), "max": round(band, 1)})
 
-    valid_index = len(labels) - 1
+    return labels, values, forecast_values, valid_index
+
+
+@router.get("/{patient_id}/chart")
+def get_chart(patient_id: int, uid: str = Query(default=None), db: Session = Depends(get_db)):
+    """Compute care score timeline from real visit data."""
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    # Fetch all visits for this patient
+    visits = db.query(Visit).filter(Visit.field_id == patient_id).all()
+
+    labels, values, forecast_values, valid_index = _compute_care_scores(visits, patient)
+
     return {
         "labels": labels,
         "values": values,
