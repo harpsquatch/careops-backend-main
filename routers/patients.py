@@ -200,3 +200,14 @@ def get_chart(patient_id: int, uid: str = Query(default=None), db: Session = Dep
         "valid_index": valid_index,
     }
 
+
+@router.get("/{patient_id}/summary")
+def get_patient_summary(patient_id: int, uid: str = Query(default=None), db: Session = Depends(get_db)):
+    """
+    Generate an AI-powered patient summary from live data.
+    Returns structured insights: status, risks, cadence, next actions, AI-generated insights.
+    """
+    from agents.summary_agent import run_patient_summary_agent
+
+    return run_patient_summary_agent(patient_id=patient_id, uid=uid, db=db)
+

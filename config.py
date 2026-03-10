@@ -35,3 +35,6 @@ DATABASE_URL = _resolve_database_url()
 SECRET_KEY = os.getenv("SECRET_KEY", "careops-dev-secret-change-me")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+
+# OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
